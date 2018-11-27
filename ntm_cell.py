@@ -29,7 +29,7 @@ class NTMCell(object):
         self.depth = 0
         self.states = []
 
-    def __call__(self, input_, state=None, scope=None):
+    def __call__(self, input_, beta2, state=None, scope=None, isEncoder=True, use=True):
         """Run one step of NTM.
 
         Args:
@@ -48,10 +48,15 @@ class NTMCell(object):
             - A 2D, batch x state_size, Tensor representing the new state of LSTM
                 after reading "input_" when previous state was "state".
         """
+        if isEncoder:
+            EnDe='en'
+        else:
+            EnDe='de'
 
+        Beta_2=beta2
 
         if state == None:
-            state = self.initial_state()
+            state = self.initial_state(use)
 
         M_prev = state['M']                     #M*N*b
         read_w_list_prev = state['read_w']      #b*M
@@ -61,9 +66,7 @@ class NTMCell(object):
         hidden_list_prev = state['hidden']      #b*h
 
         # build a controller
-        output_list, hidden_list = self.build_controller(input_, read_list_prev,
-                                                         output_list_prev,
-                                                         hidden_list_prev)
+        output_list, hidden_list = self.build_controller(input_, read_list_prev, output_list_prev, hidden_list_prev, EnDe, Beta_2)
 
         # last output layer from LSTM controller
         #print("taking last output")
@@ -103,9 +106,9 @@ class NTMCell(object):
     """
 
     def build_controller(self, input_,
-                         read_list_prev, output_list_prev, hidden_list_prev):
+                         read_list_prev, output_list_prev, hidden_list_prev, EnDe, Beta_2):
         """Build LSTM controller."""
-        print("Build LSTM Controller")
+        #print("Build LSTM Controller")
 
         with tf.variable_scope("controller"):
             output_list = []
@@ -117,19 +120,12 @@ class NTMCell(object):
                 #print(o_prev)
                 #print("h_prev")
                 #print(h_prev)
-
-                if layer_idx == 0:
-                    def new_gate(gate_name):
-                        return linear([input_, o_prev] + read_list_prev,            #[input_, o_prev] + read_list_prev: list of 3 b*_ tensors
-                                      output_size = self.controller_dim,
+                def new_gate(gate_name):
+                    a = [input_, o_prev]
+                    np.append(a,tf.squeeze(tf.multiply(Beta_2,read_list_prev)))
+                    return linear(a, output_size = self.controller_dim,
                                       bias = True,
-                                      scope = "%s_gate_%s" % (gate_name, layer_idx))
-                else:
-                    def new_gate(gate_name):
-                        return linear([output_list[-1], o_prev],
-                                      output_size = self.controller_dim,
-                                      bias = True,
-                                      scope="%s_gate_%s" % (gate_name, layer_idx))
+                                      scope = "%s_gate_%s_%s" % (gate_name, layer_idx, EnDe))
 
                 # input, forget, and output gates for LSTM
                 i = tf.sigmoid(new_gate('input'))               #b*h
@@ -149,7 +145,7 @@ class NTMCell(object):
 
     def build_memory(self, M_prev, read_w_list_prev, write_w_list_prev, last_output):
         """Build a memory to read & write."""
-        print("Building Memory")
+        #print("Building Memory")
         with tf.variable_scope("memory"):
             # 3.1 Reading
             if self.read_head_size == 1:
@@ -283,7 +279,7 @@ class NTMCell(object):
 
             if is_read:
                 # 3.1 Reading
-                read = tf.squeeze(tf.matmul(tf.transpose(M_prev, perm=[0, 2, 1]), tf.reshape(w,[-1,-1,1])))       #b*M
+                read = tf.squeeze(tf.matmul(tf.transpose(M_prev, perm=[0, 2, 1]), tf.expand_dims(w,2)))       #b*M
                 #print("w read ")
                 #print(w)
                 #print(read)
@@ -298,24 +294,25 @@ class NTMCell(object):
                 #print(erase)
                 return w, add, erase
 
-    def initial_state(self, dummy_value=0.0):
+    def initial_state(self, use, dummy_value=1.0):
+        #print(tf.contrib.framework.get_name_scope())
         self.depth = 0
         self.states = []
-        with tf.variable_scope("init_cell",reuse=False):
+        with tf.variable_scope("init_cell", reuse=tf.AUTO_REUSE):
             # always zero
-            dummy = tf.Variable(tf.constant([[dummy_value]], dtype=tf.float32))
-
+            dummy = tf.constant([[dummy_value]], dtype=tf.float32)
+            
             # memory
-            M_init_linear = tf.tanh(Linear(dummy, self.mem_size * self.mem_dim,
-                                    name='M_init_linear'))
-            #print("Shape of M_init_linear")
-            #print(M_init_linear.get_shape().as_list())
-            M_init1 = tf.reshape(M_init_linear, [self.mem_size, self.mem_dim])
-            #print("Shape of M_init1")
-            #print(M_init1.get_shape().as_list())
-            M_init=tf.tile(tf.expand_dims(M_init1, 0), [self.batch_size, 1, 1])
-            #print("Shape of M_init")
-            #print(M_init.get_shape().as_list())
+            #M_init_linear = tf.tanh(Linear(dummy, self.mem_size * self.mem_dim,
+                                    #name='M_init_linear'))
+            
+            #M_init1 = tf.reshape(M_init_linear, [self.mem_size, self.mem_dim])
+            
+            #M_init=tf.tile(tf.expand_dims(M_init1, 0), [self.batch_size, 1, 1])
+            
+            with tf.variable_scope("memory", reuse=use):
+                M_init_linear = tf.get_variable('init_M', [self.mem_size, self.mem_dim], initializer=tf.constant_initializer(1e-6), trainable=False)
+                M_init = tf.tile(tf.expand_dims(M_init_linear, 0), [self.batch_size, 1, 1])
 
 
             # read weights
