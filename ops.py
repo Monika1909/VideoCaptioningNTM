@@ -48,7 +48,7 @@ def linear(args, output_size, bias, bias_start=0.0, scope=None):
             total_arg_size += shape[1]
 
     # Now the computation.
-    with vs.variable_scope(scope or "Linear"):
+    with vs.variable_scope(scope,reuse=tf.AUTO_REUSE):
         matrix = vs.get_variable("Matrix", [total_arg_size, output_size])
         if len(args) == 1:
             res = tf.matmul(args[0], matrix)
@@ -187,7 +187,6 @@ def outer_product(*inputs):
         output = tf.matmul(inputs[0], inputs[1])
     elif order == 3:
         size = []
-        idx = 1
         for i in range(order):
             size.append(inputs[i].get_shape()[0])
         output = tf.zeros(size)
